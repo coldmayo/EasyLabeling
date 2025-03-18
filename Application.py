@@ -1,5 +1,7 @@
-from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog
+from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView
 from PyQt6.QtGui import QPixmap
+
+from Draw import *
 
 class Application(QMainWindow):
     def __init__(self):
@@ -11,17 +13,14 @@ class Application(QMainWindow):
         self.setCentralWidget(widg)
 
         layout = QVBoxLayout()
-        self.im_label = QLabel()
-
-        pixmap = QPixmap("arcs.png");
-        if pixmap.isNull():
-            print("Failed to load image")
+        self.image = QGraphicsScene()
+        self.view = DrawingView(self.image)
+        self.update_image()
 
         self.open_file_exp_button = QPushButton("Find Picture")
-        self.open_file_exp_button.clicked.connect(self.open_file_exp) 
+        self.open_file_exp_button.clicked.connect(self.open_file_exp)
 
-        self.im_label.setPixmap(pixmap)
-        layout.addWidget(self.im_label)
+        layout.addWidget(self.view)
         layout.addWidget(self.open_file_exp_button)
         widg.setLayout(layout)
 
@@ -30,7 +29,8 @@ class Application(QMainWindow):
         if pixmap.isNull():
             print("Failed to load image")
         else:
-            self.im_label.setPixmap(pixmap)
+            self.image.clear()
+            self.image.addPixmap(pixmap)
 
     def open_file_exp(self):
         file_dia = QFileDialog()
@@ -43,3 +43,8 @@ class Application(QMainWindow):
         if file_path:
             self.file_path = file_path
             self.update_image()
+
+    def clear_drawings(self):
+        for item in self.image.items():
+            if not isinstance(item, QGraphicsPixmapItem):
+                self.image.removeItem(item)
