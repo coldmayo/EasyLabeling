@@ -7,6 +7,7 @@ class DrawingView(QGraphicsView):
         super().__init__(scene)
         self.drawing = False
         self.start = QPointF()
+        self.end = 0
         self.current_rect = None
 
     def mousePressEvent(self, event):
@@ -17,11 +18,13 @@ class DrawingView(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         if self.drawing and self.current_rect:
-            end_point = self.mapToScene(event.position().toPoint())
-            rect = QRectF(self.start, end_point).normalized()
+            self.end = self.mapToScene(event.position().toPoint())
+            rect = QRectF(self.start, self.end).normalized()
             self.current_rect.setRect(rect)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drawing = False
             self.current_rect = None
+            #print(self.start, self.end)
+            # self.start has the top left point and self.end has the bottom right point
