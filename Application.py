@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView
+from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView, QDialog, QComboBox, QFormLayout, QDialogButtonBox, QGraphicsPixmapItem
 from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush
 from PyQt6.QtCore import Qt, QPointF, QRectF
 
@@ -9,8 +9,13 @@ import matplotlib.image as mpimg
 
 from Draw import *
 
+# classes:
+# 1: alpha
+# 2: beta
+# 3: muon
+
 def datasetInfo(imageData, annotData):
-    return {"categories": [{"id": 1,"name": "track"}],"images": imageData,"annotations": annotData}
+    return {"categories": [{"id": 1,"name": "alpha"}, {"id": 2, "name": "beta"}, {"id": 3, "name": "muon"}],"images": imageData,"annotations": annotData}
 
 def bbox_to_rect(bboxparam):
     # Convert the bounding box to 4 lines in matplotlib to visualize it. boundingbox=[min_x,min_y,max_x,max_y]
@@ -24,6 +29,44 @@ def bbox_to_rect(bboxparam):
         #to visualize use: matplotlib.plot(*bbox_to_rect(boundingbox),color='green')  on the same plot where imshow shows the mask
         return boxlines
 
+class LabelPopup(QDialog):
+    def __init__(self, bbox):
+        super().__init__()
+
+        self.setWindowTitle("Label Bounding Box")
+        
+        self.bbox = bbox
+        self.label = None
+
+        layout = QFormLayout()
+
+        self.coords = QLabel(
+            f"x={bbox[0]}, y={bbox[1]}, "
+            f"w={bbox[2]}, h={bbox[3]}"
+        )
+
+        self.combo = QComboBox()
+        self.combo.addItems(["alpha", "beta", "muon"])
+
+        layout.addRow("Coordinates:", self.coords)
+        layout.addRow("Label:", self.combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
+
+    def get_label(self):
+        return self.combo.currentText()
+
 class Application(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -32,19 +75,25 @@ class Application(QMainWindow):
 
         self.json_path = "data.json"
 
+        self.box_labels = {}
+
         widg = QWidget()
         self.setCentralWidget(widg)
 
         layout = QVBoxLayout()
         self.image = QGraphicsScene()
         self.view = DrawingView(self.image)
+        self.view.on_box_clicked = self.box_clicked
         self.update_image()
 
         self.open_file_exp_button = QPushButton("Find Picture")
         self.open_file_exp_button.clicked.connect(self.open_file_exp)
         
-        self.show_bbox_button = QPushButton("Show bbox")
-        self.show_bbox_button.clicked.connect(self.print_bbox)
+        # self.show_bbox_button = QPushButton("Select bbox")
+        # self.show_bbox_button.clicked.connect(self.enable_selection)
+
+        exit_button = QPushButton("Exit App")
+        exit_button.clicked.connect(self.close)
         
         self.clear_rects_button = QPushButton("Clear boxes")
         self.clear_rects_button.clicked.connect(self.clear_drawings)
@@ -57,14 +106,17 @@ class Application(QMainWindow):
 
         layout.addWidget(self.view)
         layout.addWidget(self.open_file_exp_button)
-        layout.addWidget(self.show_bbox_button)
+        #layout.addWidget(self.show_bbox_button)
         #layout.addWidget(self.check_plot_button)
         layout.addWidget(self.save_to_json)
         layout.addWidget(self.clear_rects_button)
+
+        layout.addWidget(exit_button)
+
         widg.setLayout(layout)
 
     def test_bbox(self):
-        bbox = self.rect_bounds()
+        bbox, labels = self.rect_bounds()
         img = mpimg.imread(self.file_path)
         imgplot = plt.imshow(img)
 
@@ -102,8 +154,8 @@ class Application(QMainWindow):
         
         
         imageData.append({"id": i, "width": w, "height": h, "file_name":self.file_path})
-        for d in data:
-            annotData.append({"id": j, "category_id":1, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[2]})
+        for d, l in data:
+            annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[2]})
             j += 1
         print("done")
         with open(self.json_path, 'w') as f:
@@ -113,14 +165,37 @@ class Application(QMainWindow):
         bounds = self.rect_bounds()
         print(bounds)
 
+    def enable_selection(self):
+        self.selecting = True
+        for item in self.image.items():
+            if isinstance(item, QGraphicsRectItem):
+                item.setAcceptHoverEvents(True)
+                item.mousePressEvent = lambda event, box=item: self.box_clicked(event, box)
+
+    def box_clicked(self, box):
+
+        rect = box.rect()
+        bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
+
+        popup = LabelPopup(bbox)
+
+        if popup.exec():
+            label = popup.get_label()
+            print("BBox:", bbox, "Label:", label)
+
+            self.box_labels[id(box)] = label
+
     def rect_bounds(self):
-        bounds = []
+        results = []
+        category = {"alpha": 1, "beta": 2, "muon": 3}
         for i in self.image.items():
             if isinstance(i, QGraphicsRectItem):
                 rect = i.rect()
-
-                bounds.append([rect.x(), rect.y(), rect.width(), rect.height()])
-        return bounds
+                bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
+                label_str = self.box_labels.get(id(i), "alpha")  # default alpha
+                label_id = category[label_str]
+                results.append((bbox, label_id))
+        return results
 
     def update_image(self):
         pixmap = QPixmap(self.file_path)
@@ -145,4 +220,5 @@ class Application(QMainWindow):
     def clear_drawings(self):
         for item in self.image.items():
             if not isinstance(item, QGraphicsPixmapItem):
+                self.box_labels.pop(id(item), None)
                 self.image.removeItem(item)
