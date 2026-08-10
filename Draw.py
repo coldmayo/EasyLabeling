@@ -10,12 +10,16 @@ class DrawingView(QGraphicsView):
         self.end = QPointF()
         self.current_rect = None
         self.on_box_clicked = None
+        self.on_before_draw = None
+        self.on_box_drawn = None
+        self._pre_draw_snapshot = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drawing = True
             self.start = self.mapToScene(event.position().toPoint())
             self.end = self.start
+            self._pre_draw_snapshot = self.on_before_draw() if self.on_before_draw else None
             self.current_rect = self.scene().addRect(QRectF(self.start, self.start), QPen(Qt.GlobalColor.red), QBrush(Qt.BrushStyle.NoBrush))
 
     def mouseMoveEvent(self, event):
@@ -28,17 +32,14 @@ class DrawingView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drawing = False
 
-            # If start ~ end, it's a click not a drag — find the box under cursor
             delta = self.end - self.start
             is_click = abs(delta.x()) < 5 and abs(delta.y()) < 5
 
             if is_click:
-                # Remove the tiny accidental rect that was created on press
                 if self.current_rect:
                     self.scene().removeItem(self.current_rect)
                     self.current_rect = None
 
-                # Find which existing rect contains the click point
                 if self.on_box_clicked:
                     for item in self.scene().items():
                         if isinstance(item, QGraphicsRectItem):
@@ -47,3 +48,5 @@ class DrawingView(QGraphicsView):
                                 break
             else:
                 self.current_rect = None
+                if self.on_box_drawn:
+                    self.on_box_drawn(self._pre_draw_snapshot)

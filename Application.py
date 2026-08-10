@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView, QDialog, QComboBox, QFormLayout, QDialogButtonBox, QGraphicsPixmapItem
-from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush
+from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QGraphicsScene, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView, QDialog, QComboBox, QFormLayout, QDialogButtonBox, QGraphicsPixmapItem
+from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QPointF, QRectF
 
 import json
@@ -89,7 +89,7 @@ class LabelPopup(QDialog):
         super().__init__()
 
         self.setWindowTitle("Label Bounding Box")
-        
+
         self.bbox = bbox
         self.label = None
 
@@ -131,6 +131,9 @@ class Application(QMainWindow):
 
         self.json_path = "data.json"
 
+        self.undo_stack = []
+        self.redo_stack = []
+
         self.box_labels = {}
 
         widg = QWidget()
@@ -140,24 +143,37 @@ class Application(QMainWindow):
         self.image = QGraphicsScene()
         self.view = DrawingView(self.image)
         self.view.on_box_clicked = self.box_clicked
+        self.view.on_before_draw = self._snapshot
+        self.view.on_box_drawn = self.commit_draw
         self.update_image()
 
         self.open_file_exp_button = QPushButton("Find Picture")
         self.open_file_exp_button.clicked.connect(self.open_file_exp)
         self.saved_anns = False
         self.heard_warning = False
-        
+
         # self.show_bbox_button = QPushButton("Select bbox")
         # self.show_bbox_button.clicked.connect(self.enable_selection)
 
         exit_button = QPushButton("Exit App")
         exit_button.clicked.connect(self.close)
-        
+
         self.clear_rects_button = QPushButton("Clear boxes")
         self.clear_rects_button.clicked.connect(self.clear_drawings)
 
         self.save_to_json = QPushButton("Save Data")
         self.save_to_json.clicked.connect(self.save_coco_json)
+
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.clicked.connect(self.undo)
+
+        self.redo_button = QPushButton("Redo")
+        self.redo_button.clicked.connect(self.redo)
+
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self.undo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self.redo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.redo)
+
 
         #self.check_plot_button = QPushButton("Check bbox with Matplotlib")
         #self.check_plot_button.clicked.connect(self.test_bbox)
@@ -168,6 +184,8 @@ class Application(QMainWindow):
         #layout.addWidget(self.check_plot_button)
         layout.addWidget(self.save_to_json)
         layout.addWidget(self.clear_rects_button)
+        layout.addWidget(self.undo_button)
+        layout.addWidget(self.redo_button)
 
         layout.addWidget(exit_button)
 
@@ -209,8 +227,8 @@ class Application(QMainWindow):
         except FileNotFoundError:
             i = 0; j = 0
             print("making file...")
-        
-        
+
+
         imageData.append({"id": i, "width": w, "height": h, "file_name":self.file_path})
         for d, l in data:
             annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[2]})
@@ -244,10 +262,13 @@ class Application(QMainWindow):
         popup = LabelPopup(bbox)
 
         if popup.exec():
+            self.push_undo()
+
             label = popup.get_label()
             print("BBox:", bbox, "Label:", label)
 
             self.box_labels[id(box)] = label
+            self.saved_anns = False
 
     def rect_bounds(self):
         results = []
@@ -269,6 +290,59 @@ class Application(QMainWindow):
             self.image.clear()
             self.image.addPixmap(pixmap)
 
+    def _snapshot(self):
+        boxes = []
+        for item in self.image.items():
+            if isinstance(item, QGraphicsRectItem):
+                rect = item.rect()
+                boxes.append({
+                    "x": rect.x(), "y": rect.y(),
+                    "w": rect.width(), "h": rect.height(),
+                    "pen": QPen(item.pen()),
+                    "brush": QBrush(item.brush()),
+                    "label": self.box_labels.get(id(item), "alpha"),
+                })
+        return boxes
+
+    def _restore(self, snapshot):
+        for item in list(self.image.items()):
+            if isinstance(item, QGraphicsRectItem):
+                self.image.removeItem(item)
+
+        self.box_labels = {}
+        for b in snapshot:
+            rect_item = self.image.addRect(
+                QRectF(b["x"], b["y"], b["w"], b["h"]), b["pen"], b["brush"]
+            )
+            self.box_labels[id(rect_item)] = b["label"]
+
+    def push_undo(self):
+        self.undo_stack.append(self._snapshot())
+        self.redo_stack.clear()
+
+    def commit_draw(self, pre_draw_snapshot):
+        if pre_draw_snapshot is None:
+            return
+        self.undo_stack.append(pre_draw_snapshot)
+        self.redo_stack.clear()
+        self.saved_anns = False
+
+    def undo(self):
+        if not self.undo_stack:
+            return
+        self.redo_stack.append(self._snapshot())
+        prev_state = self.undo_stack.pop()
+        self._restore(prev_state)
+        self.saved_anns = False
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+        self.undo_stack.append(self._snapshot())
+        next_state = self.redo_stack.pop()
+        self._restore(next_state)
+        self.saved_anns = False
+
     def dataForImg(self):   # do we have data on this image in the dataset already?
         try:
             with open(self.json_path, 'r') as f:
@@ -288,14 +362,11 @@ class Application(QMainWindow):
         if self.saved_anns == True or self.dataForImg() == True or self.heard_warning == True:
             proceed = True
         elif has_tracks:
-            # tracks were drawn but not saved yet - warn before losing them
             imgd, ad = self.data_for_save()
             warn = SaveTheData(imgd, ad)
             warn.exec()
-            # Save and Ignore both call accept(), so either way we move on
             proceed = True
         else:
-            # no tracks drawn on this image at all - confirm before switching
             warn = NoTracksWarning()
             proceed = warn.exec() == QDialog.DialogCode.Accepted
 
@@ -312,9 +383,12 @@ class Application(QMainWindow):
                 self.box_labels = {}
                 self.heard_warning = False
                 self.saved_anns = False
-
+                self.undo_stack = []
+                self.redo_stack = []
+                self._last_state = []
 
     def clear_drawings(self):
+        self.push_undo()
         for item in self.image.items():
             if not isinstance(item, QGraphicsPixmapItem):
                 self.box_labels.pop(id(item), None)
