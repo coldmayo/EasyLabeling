@@ -29,6 +29,61 @@ def bbox_to_rect(bboxparam):
         #to visualize use: matplotlib.plot(*bbox_to_rect(boundingbox),color='green')  on the same plot where imshow shows the mask
         return boxlines
 
+class NoTracksWarning(QDialog):
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("No Tracks Labeled")
+
+        layout = QVBoxLayout()
+
+        warning = QLabel("You haven't labeled any tracks on this image yet. Switch pictures anyway?")
+        layout.addWidget(warning)
+
+        switch_btn = QPushButton("Switch Anyway")
+        switch_btn.clicked.connect(self.accept)
+        layout.addWidget(switch_btn)
+
+        go_back_btn = QPushButton("Go Back")
+        go_back_btn.clicked.connect(self.reject)
+        layout.addWidget(go_back_btn)
+
+        self.setLayout(layout)
+
+
+class SaveTheData(QDialog):
+    def __init__(self, imgdata, annotdata):
+        super().__init__()
+
+        self.json_path = "data.json"
+        self.imgdata = imgdata
+        self.annotdata = annotdata
+
+        self.setWindowTitle("Warning...")
+
+        layout = QVBoxLayout()
+
+        warning = QLabel("Yo, you forgot to save your annotations before switching to a new file")
+        layout.addWidget(warning)
+
+        save_btn = QPushButton("Save to File")
+        save_btn.clicked.connect(self.save_and_close)
+        layout.addWidget(save_btn)
+
+        ignore_btn = QPushButton("Ignore")
+        ignore_btn.clicked.connect(self.accept)
+        layout.addWidget(ignore_btn)
+
+        self.setLayout(layout)
+
+    def save_and_close(self):
+        return self.save_coco_json(self.imgdata, self.annotdata)
+
+    def save_coco_json(self, imgd, ad):
+        with open(self.json_path, 'w') as f:
+            json_o = json.dump(datasetInfo(imgd, ad), f)
+        return self.accept()
+
 class LabelPopup(QDialog):
     def __init__(self, bbox):
         super().__init__()
@@ -54,6 +109,7 @@ class LabelPopup(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
             QDialogButtonBox.StandardButton.Cancel
+            #QDialogButtonBox.StandardButton.
         )
 
         buttons.accepted.connect(self.accept)
@@ -88,6 +144,8 @@ class Application(QMainWindow):
 
         self.open_file_exp_button = QPushButton("Find Picture")
         self.open_file_exp_button.clicked.connect(self.open_file_exp)
+        self.saved_anns = False
+        self.heard_warning = False
         
         # self.show_bbox_button = QPushButton("Select bbox")
         # self.show_bbox_button.clicked.connect(self.enable_selection)
@@ -124,7 +182,7 @@ class Application(QMainWindow):
             plt.plot(*bbox_to_rect(i), color='purple')
         plt.show()
 
-    def save_coco_json(self):
+    def data_for_save(self):
         image = Image.open(self.file_path)
         w, h = image.size
         data = self.rect_bounds()
@@ -157,9 +215,15 @@ class Application(QMainWindow):
         for d, l in data:
             annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[2]})
             j += 1
-        print("done")
+        return imageData, annotData
+
+    def save_coco_json(self):
+        imageData, annotData = self.data_for_save()
+
         with open(self.json_path, 'w') as f:
             json_o = json.dump(datasetInfo(imageData, annotData), f)
+
+        self.saved_anns = True
 
     def print_bbox(self):
         bounds = self.rect_bounds()
@@ -205,17 +269,50 @@ class Application(QMainWindow):
             self.image.clear()
             self.image.addPixmap(pixmap)
 
+    def dataForImg(self):   # do we have data on this image in the dataset already?
+        try:
+            with open(self.json_path, 'r') as f:
+                old_data = json.load(f)
+            for ims in old_data["images"]:
+                if ims["file_name"] == self.file_path:
+                    return True
+            return False
+
+        except FileNotFoundError:
+            return False
+
     def open_file_exp(self):
         file_dia = QFileDialog()
-        file_path, _ = file_dia.getOpenFileName(
-            self,
-            "Select an Image"
-            "Images (*.png *.jpg *.bmp);;All Files (*)"
-        )
+        has_tracks = len(self.rect_bounds()) > 0
 
-        if file_path:
-            self.file_path = file_path
-            self.update_image()
+        if self.saved_anns == True or self.dataForImg() == True or self.heard_warning == True:
+            proceed = True
+        elif has_tracks:
+            # tracks were drawn but not saved yet - warn before losing them
+            imgd, ad = self.data_for_save()
+            warn = SaveTheData(imgd, ad)
+            warn.exec()
+            # Save and Ignore both call accept(), so either way we move on
+            proceed = True
+        else:
+            # no tracks drawn on this image at all - confirm before switching
+            warn = NoTracksWarning()
+            proceed = warn.exec() == QDialog.DialogCode.Accepted
+
+        if proceed:
+            file_path, _ = file_dia.getOpenFileName(
+                self,
+                "Select an Image"
+                "Images (*.png *.jpg *.bmp);;All Files (*)"
+            )
+
+            if file_path:
+                self.file_path = file_path
+                self.update_image()
+                self.box_labels = {}
+                self.heard_warning = False
+                self.saved_anns = False
+
 
     def clear_drawings(self):
         for item in self.image.items():
