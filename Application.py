@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QGraphicsScene, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView, QDialog, QComboBox, QFormLayout, QDialogButtonBox, QGraphicsPixmapItem
+from PyQt6.QtWidgets import QApplication, QGraphicsRectItem, QGraphicsScene, QLabel, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QGraphicsView, QDialog, QComboBox, QFormLayout, QDialogButtonBox, QGraphicsPixmapItem, QGraphicsTextItem
 from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QPointF, QRectF
 
@@ -28,61 +28,6 @@ def bbox_to_rect(bboxparam):
         boxlines=[x1,x2],[y1,y1],[x1,x2],[y2,y2],[x1,x1],[y1,y2],[x2,x2],[y1,y2]
         #to visualize use: matplotlib.plot(*bbox_to_rect(boundingbox),color='green')  on the same plot where imshow shows the mask
         return boxlines
-
-class NoTracksWarning(QDialog):
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle("No Tracks Labeled")
-
-        layout = QVBoxLayout()
-
-        warning = QLabel("You haven't labeled any tracks on this image yet. Switch pictures anyway?")
-        layout.addWidget(warning)
-
-        switch_btn = QPushButton("Switch Anyway")
-        switch_btn.clicked.connect(self.accept)
-        layout.addWidget(switch_btn)
-
-        go_back_btn = QPushButton("Go Back")
-        go_back_btn.clicked.connect(self.reject)
-        layout.addWidget(go_back_btn)
-
-        self.setLayout(layout)
-
-
-class SaveTheData(QDialog):
-    def __init__(self, imgdata, annotdata):
-        super().__init__()
-
-        self.json_path = "data.json"
-        self.imgdata = imgdata
-        self.annotdata = annotdata
-
-        self.setWindowTitle("Warning...")
-
-        layout = QVBoxLayout()
-
-        warning = QLabel("Yo, you forgot to save your annotations before switching to a new file")
-        layout.addWidget(warning)
-
-        save_btn = QPushButton("Save to File")
-        save_btn.clicked.connect(self.save_and_close)
-        layout.addWidget(save_btn)
-
-        ignore_btn = QPushButton("Ignore")
-        ignore_btn.clicked.connect(self.accept)
-        layout.addWidget(ignore_btn)
-
-        self.setLayout(layout)
-
-    def save_and_close(self):
-        return self.save_coco_json(self.imgdata, self.annotdata)
-
-    def save_coco_json(self, imgd, ad):
-        with open(self.json_path, 'w') as f:
-            json_o = json.dump(datasetInfo(imgd, ad), f)
-        return self.accept()
 
 class LabelPopup(QDialog):
     def __init__(self, bbox):
@@ -126,7 +71,7 @@ class LabelPopup(QDialog):
 class Application(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.file_path = "CuntSweep.png"
+        self.file_path = None
         self.setWindowTitle("Label Images")
 
         self.json_path = "data.json"
@@ -145,7 +90,13 @@ class Application(QMainWindow):
         self.view.on_box_clicked = self.box_clicked
         self.view.on_before_draw = self._snapshot
         self.view.on_box_drawn = self.commit_draw
+        self.view.on_box_right_clicked = self.delete_box
         self.update_image()
+
+        placeholder_text = self.image.addText("Please select an image using the 'Find Picture' button.")
+        placeholder_text.setDefaultTextColor(QColor("gray"))
+        # Center the text loosely in the initial view area
+        placeholder_text.setPos(50, 50)
 
         self.open_file_exp_button = QPushButton("Find Picture")
         self.open_file_exp_button.clicked.connect(self.open_file_exp)
@@ -190,6 +141,47 @@ class Application(QMainWindow):
         layout.addWidget(exit_button)
 
         widg.setLayout(layout)
+
+    def load_existing_annotations(self):
+        try:
+            with open(self.json_path, 'r') as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+
+        image_id = None
+        for ims in data.get("images", []):
+            if ims["file_name"] == self.file_path:
+                image_id = ims["id"]
+                break
+
+        if image_id is None:
+            return
+
+        category_mapping = {1: "alpha", 2: "beta", 3: "muon"}
+
+        for annot in data.get("annotations", []):
+            if annot["image_id"] == image_id:
+                bbox = annot["bbox"]  # [x, y, width, height]
+                cat_id = annot["category_id"]
+                label_str = category_mapping.get(cat_id, "alpha")
+
+                rect_item = self.image.addRect(
+                    QRectF(bbox[0], bbox[1], bbox[2], bbox[3]),
+                    QPen(QColor("blue"), 2),
+                    QBrush(Qt.BrushStyle.NoBrush)
+                )
+                
+                # Make the rect item selectable/interactable if needed
+                rect_item.setAcceptHoverEvents(True)
+
+                # Store the label in your tracking dictionary
+                self.box_labels[id(rect_item)] = label_str
+
+                # Add the text label below the box
+                text_item = QGraphicsTextItem(label_str, rect_item)
+                text_item.setPos(bbox[0], bbox[1] + bbox[3])
+                text_item.setDefaultTextColor(QColor("magenta"))
 
     def test_bbox(self):
         bbox, labels = self.rect_bounds()
@@ -270,6 +262,36 @@ class Application(QMainWindow):
             self.box_labels[id(box)] = label
             self.saved_anns = False
 
+            for child in box.childItems():
+                if isinstance(child, QGraphicsTextItem):
+                    self.image.removeItem(child)
+
+            text_item = QGraphicsTextItem(label, box)
+            text_item.setPos(rect.x(), rect.y() + rect.height())
+            text_item.setDefaultTextColor(QColor("magenta"))
+
+    def delete_box(self, box):
+        confirm = QMessageBox.question(
+            self,
+            "Delete Box",
+            "Delete this bounding box?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self.push_undo()
+
+        for child in box.childItems():
+            if isinstance(child, QGraphicsTextItem):
+                self.image.removeItem(child)
+
+        self.box_labels.pop(id(box), None)
+        self.image.removeItem(box)
+        self.saved_anns = False
+
+
     def rect_bounds(self):
         results = []
         category = {"alpha": 1, "beta": 2, "muon": 3}
@@ -315,6 +337,9 @@ class Application(QMainWindow):
                 QRectF(b["x"], b["y"], b["w"], b["h"]), b["pen"], b["brush"]
             )
             self.box_labels[id(rect_item)] = b["label"]
+            text_item = QGraphicsTextItem(b["label"], rect_item)
+            text_item.setPos(b["x"], b["y"] + b["h"])
+            text_item.setDefaultTextColor(QColor("magenta"))
 
     def push_undo(self):
         self.undo_stack.append(self._snapshot())
@@ -344,6 +369,8 @@ class Application(QMainWindow):
         self.saved_anns = False
 
     def dataForImg(self):   # do we have data on this image in the dataset already?
+        if not self.file_path:
+            return False
         try:
             with open(self.json_path, 'r') as f:
                 old_data = json.load(f)
@@ -358,22 +385,44 @@ class Application(QMainWindow):
     def open_file_exp(self):
         file_dia = QFileDialog()
         has_tracks = len(self.rect_bounds()) > 0
+        proceed = False
 
-        if self.saved_anns == True or self.dataForImg() == True or self.heard_warning == True:
+        if self.saved_anns or self.dataForImg() or self.heard_warning or self.file_path is None:
             proceed = True
-        elif has_tracks:
-            imgd, ad = self.data_for_save()
-            warn = SaveTheData(imgd, ad)
-            warn.exec()
-            proceed = True
+
+        elif has_tracks and self.file_path is not None:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Unsaved Annotations")
+            msg.setText("Yo, you forgot to save your annotations before switching to a new file.")
+
+            save_btn = msg.addButton("Save to File", QMessageBox.ButtonRole.AcceptRole)
+            ignore_btn = msg.addButton("Ignore", QMessageBox.ButtonRole.RejectRole)
+
+            msg.exec()
+
+            # Handle user choice inline
+            if msg.clickedButton() == save_btn:
+                self.save_coco_json() # Use the app's native save method directly
+                proceed = True
+            elif msg.clickedButton() == ignore_btn:
+                proceed = True
+
         else:
-            warn = NoTracksWarning()
-            proceed = warn.exec() == QDialog.DialogCode.Accepted
+            reply = QMessageBox.question(
+                self,
+                "No Tracks Labeled",
+                "You haven't labeled any tracks on this image yet. Switch pictures anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                proceed = True
 
         if proceed:
             file_path, _ = file_dia.getOpenFileName(
                 self,
-                "Select an Image"
+                "Select an Image",
                 "Images (*.png *.jpg *.bmp);;All Files (*)"
             )
 
@@ -386,6 +435,7 @@ class Application(QMainWindow):
                 self.undo_stack = []
                 self.redo_stack = []
                 self._last_state = []
+                self.load_existing_annotations()
 
     def clear_drawings(self):
         self.push_undo()
