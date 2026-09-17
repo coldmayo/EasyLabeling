@@ -152,8 +152,9 @@ class Application(QMainWindow):
             return
 
         image_id = None
+        filename_only = os.path.basename(self.file_path)
         for ims in data.get("images", []):
-            if ims["file_name"] == self.file_path:
+            if ims["file_name"] == filename_only:
                 image_id = ims["id"]
                 break
 
@@ -198,36 +199,40 @@ class Application(QMainWindow):
         image = Image.open(self.file_path)
         w, h = image.size
         data = self.rect_bounds()
-        annotData = []
-        imageData = []
+        filename_only = os.path.basename(self.file_path)
 
-        last_im_id = 0
-        last_a_id = 0
+        imageData = []
+        annotData = []
+        image_id = None
 
         try:
             with open(self.json_path, 'r') as f:
                 old_data = json.load(f)
-            for ims in old_data["images"]:
-                last_im_id = ims["id"]
+
+            for ims in old_data.get("images", []):
                 imageData.append(ims)
+                if ims["file_name"] == filename_only:
+                    image_id = ims["id"]
 
-            for annot in old_data["annotations"]:
-                last_a_id = annot["id"]
-                annotData.append(annot)
-
-            i = last_im_id + 1
-            j = last_a_id + 1
+            for annot in old_data.get("annotations", []):
+                if image_id is None or annot["image_id"] != image_id:
+                    annotData.append(annot)
 
         except FileNotFoundError:
-            i = 0; j = 0
             print("making file...")
 
-        filename_only = os.path.basename(self.file_path)
+        if image_id is None:
+            image_id = max((im["id"] for im in imageData), default=-1) + 1
+            imageData.append({"id": image_id, "width": w, "height": h, "file_name": filename_only})
 
-        imageData.append({"id": i, "width": w, "height": h, "file_name":filename_only})
+        next_annot_id = max((a["id"] for a in annotData), default=-1) + 1
         for d, l in data:
-            annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[3]})
-            j += 1
+            annotData.append({
+                "id": next_annot_id, "category_id": l, "bbox": d,
+                "iscrowd": 0, "image_id": image_id, "area": d[2] * d[3]
+            })
+            next_annot_id += 1
+
         return imageData, annotData
 
     def save_coco_json(self):
@@ -296,29 +301,29 @@ class Application(QMainWindow):
 
 
     def rect_bounds(self):
-    results = []
-    category = {
-        "alpha": 1,
-        "beta": 2,
-        "muon": 3,
-        "other": 4
-    }
+        results = []
+        category = {
+            "alpha": 1,
+            "beta": 2,
+            "muon": 3,
+            "other": 4
+        }
 
-    for i in self.image.items():
-        if isinstance(i, QGraphicsRectItem):
-            rect = i.rect()
-            bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
+        for i in self.image.items():
+            if isinstance(i, QGraphicsRectItem):
+                rect = i.rect()
+                bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
 
-            label_str = i.data(0)
+                label_str = i.data(0)
 
-            if label_str is None:
-                print("WARNING: Bounding box has no label!")
-                continue
+                if label_str is None:
+                    print("WARNING: Bounding box has no label!")
+                    continue
 
-            label_id = category[label_str]
-            results.append((bbox, label_id))
+                label_id = category[label_str]
+                results.append((bbox, label_id))
 
-    return results
+        return results
 
     def update_image(self):
         pixmap = QPixmap(self.file_path)
@@ -387,11 +392,12 @@ class Application(QMainWindow):
     def dataForImg(self):   # do we have data on this image in the dataset already?
         if not self.file_path:
             return False
+        filename_only = os.path.basename(self.file_path)
         try:
             with open(self.json_path, 'r') as f:
                 old_data = json.load(f)
             for ims in old_data["images"]:
-                if ims["file_name"] == self.file_path:
+                if ims["file_name"] == filename_only:
                     return True
             return False
 
