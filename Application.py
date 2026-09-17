@@ -3,6 +3,7 @@ from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QPointF, QRectF
 
 import json
+import os
 from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
@@ -13,9 +14,10 @@ from Draw import *
 # 1: alpha
 # 2: beta
 # 3: muon
+# 4: Other
 
 def datasetInfo(imageData, annotData):
-    return {"categories": [{"id": 1,"name": "alpha"}, {"id": 2, "name": "beta"}, {"id": 3, "name": "muon"}],"images": imageData,"annotations": annotData}
+    return {"categories": [{"id": 1,"name": "alpha"}, {"id": 2, "name": "beta"}, {"id": 3, "name": "muon"}, {"id": 4, "name": "other"}],"images": imageData,"annotations": annotData}
 
 def bbox_to_rect(bboxparam):
     # Convert the bounding box to 4 lines in matplotlib to visualize it. boundingbox=[min_x,min_y,max_x,max_y]
@@ -46,7 +48,7 @@ class LabelPopup(QDialog):
         )
 
         self.combo = QComboBox()
-        self.combo.addItems(["alpha", "beta", "muon"])
+        self.combo.addItems(["alpha", "beta", "muon", "other"])
 
         layout.addRow("Coordinates:", self.coords)
         layout.addRow("Label:", self.combo)
@@ -158,7 +160,7 @@ class Application(QMainWindow):
         if image_id is None:
             return
 
-        category_mapping = {1: "alpha", 2: "beta", 3: "muon"}
+        category_mapping = {1: "alpha", 2: "beta", 3: "muon", 4: "other"}
 
         for annot in data.get("annotations", []):
             if annot["image_id"] == image_id:
@@ -171,7 +173,7 @@ class Application(QMainWindow):
                     QPen(QColor("blue"), 2),
                     QBrush(Qt.BrushStyle.NoBrush)
                 )
-                
+
                 # Make the rect item selectable/interactable if needed
                 rect_item.setAcceptHoverEvents(True)
 
@@ -220,10 +222,11 @@ class Application(QMainWindow):
             i = 0; j = 0
             print("making file...")
 
+        filename_only = os.path.basename(self.file_path)
 
-        imageData.append({"id": i, "width": w, "height": h, "file_name":self.file_path})
+        imageData.append({"id": i, "width": w, "height": h, "file_name":filename_only})
         for d, l in data:
-            annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[2]})
+            annotData.append({"id": j, "category_id": l, "bbox": d, "iscrowd": 0, "image_id":i, "area":d[2]*d[3]})
             j += 1
         return imageData, annotData
 
@@ -259,7 +262,7 @@ class Application(QMainWindow):
             label = popup.get_label()
             print("BBox:", bbox, "Label:", label)
 
-            self.box_labels[id(box)] = label
+            box.setData(0, label)
             self.saved_anns = False
 
             for child in box.childItems():
@@ -293,16 +296,29 @@ class Application(QMainWindow):
 
 
     def rect_bounds(self):
-        results = []
-        category = {"alpha": 1, "beta": 2, "muon": 3}
-        for i in self.image.items():
-            if isinstance(i, QGraphicsRectItem):
-                rect = i.rect()
-                bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
-                label_str = self.box_labels.get(id(i), "alpha")  # default alpha
-                label_id = category[label_str]
-                results.append((bbox, label_id))
-        return results
+    results = []
+    category = {
+        "alpha": 1,
+        "beta": 2,
+        "muon": 3,
+        "other": 4
+    }
+
+    for i in self.image.items():
+        if isinstance(i, QGraphicsRectItem):
+            rect = i.rect()
+            bbox = [rect.x(), rect.y(), rect.width(), rect.height()]
+
+            label_str = i.data(0)
+
+            if label_str is None:
+                print("WARNING: Bounding box has no label!")
+                continue
+
+            label_id = category[label_str]
+            results.append((bbox, label_id))
+
+    return results
 
     def update_image(self):
         pixmap = QPixmap(self.file_path)
